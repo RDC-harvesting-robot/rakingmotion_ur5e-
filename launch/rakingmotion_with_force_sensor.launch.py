@@ -16,11 +16,17 @@ def generate_launch_description():
             name="rakingmotion",
             output="screen",
             parameters=[{"direction": LaunchConfiguration("direction")}]
-        ),
-        Node(
-            package="leptrino_force_sensor",
-            executable="leptrino_force_sensor_node",
-            name="leptrino_force_sensor",
-            output="screen"
-        )
+        )#,
+        # Node(
+        #     package="leptrino_force_sensor",
+        #     executable="leptrino_force_sensor_node",
+        #     name="leptrino_force_sensor",
+        #     output="screen"
+        # ),
+        # Node(
+        #     package="leptrino_force_sensor",
+        #     executable='force_calibrator_node',
+        #     name='force_calibrator'
+        #     output="screen"
+        # )
     ])

@@ -16,6 +16,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 
 
 add_executable(rakingmotion src/rakingmotion.cpp)
+add_executable(servo_keyboard_input src/servo_keyboard_input.cpp)
 ament_target_dependencies(rakingmotion 
   rclcpp 
   std_msgs
@@ -25,8 +26,19 @@ ament_target_dependencies(rakingmotion
   tf2_geometry_msgs
   )
 
+ament_target_dependencies(servo_keyboard_input
+  rclcpp 
+  std_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  )
+
+
 install(TARGETS
   rakingmotion
+  servo_keyboard_input
   DESTINATION lib/${PROJECT_NAME}
 )
 

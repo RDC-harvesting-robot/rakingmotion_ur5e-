@@ -106,7 +106,7 @@ private:
         break;
 
       case State::WAITING:
-        if ((this->now() - stop_time_).seconds() >= 5.0) {
+        if ((this->now() - stop_time_).seconds() >= 3.0) {
           RCLCPP_INFO(this->get_logger(), "5秒経過 → 初期位置へ戻る");
           state_ = State::MOVING_BACK;
         }
@@ -172,8 +172,8 @@ private:
   {
     RCLCPP_INFO(this->get_logger(), "forece:%.3f",force);
     // double velocity=(150*(1-((1/6)*force)))/1000;
-    double velocity=0.15*(1.0-((1.0/6.0))*force);
-    if(velocity >= 0.15) velocity=0.15;
+    double velocity=0.10*(1.0-((1.0/6.0))*force);
+    if(velocity >= 0.10) velocity=0.10;
     return velocity;
   }
 

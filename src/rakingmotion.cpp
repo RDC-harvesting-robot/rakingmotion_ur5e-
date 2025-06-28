@@ -42,12 +42,18 @@ public:
       "/distance_from_start", 10);
 
     timer_ = this->create_wall_timer(
-      100ms, std::bind(&ServoTwistMonitor::timer_callback, this));
+      50ms, std::bind(&ServoTwistMonitor::timer_callback, this));
 
     force_sub_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
       "/calibrated_force_data", 10,
       std::bind(&ServoTwistMonitor::force_callback, this, std::placeholders::_1));
+    
+    velocity_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
+      "/calculated_velocity", 10);
+      
   }
+
+
 
 private:
   enum class State { MOVING_FORWARD, WAITING, MOVING_BACK, STOPPED };
@@ -95,7 +101,7 @@ private:
 
     switch (state_) {
       case State::MOVING_FORWARD:
-        if (dist >= 0.3 || exceeded_force()) {
+        if (dist >= 0.2 || exceeded_force()) {
           RCLCPP_INFO(this->get_logger(), "前進停止 → 5秒待機");
           state_ = State::WAITING;
           stop_time_ = this->now();
@@ -106,16 +112,16 @@ private:
         break;
 
       case State::WAITING:
-        if ((this->now() - stop_time_).seconds() >= 3.0) {
-          RCLCPP_INFO(this->get_logger(), "5秒経過 → 初期位置へ戻る");
+        if ((this->now() - stop_time_).seconds() >= 2.0) {
+          RCLCPP_INFO(this->get_logger(), "3秒経過 → 初期位置へ戻る");
           state_ = State::MOVING_BACK;
         }
         break;
 
       case State::MOVING_BACK:
-        if (std::abs(x - initial_x_) < 0.02 &&
-            std::abs(y - initial_y_) < 0.02 &&
-            std::abs(z - initial_z_) < 0.02) {
+        if (std::abs(x - initial_x_) < 0.02 ){//&&
+            // std::abs(y - initial_y_) < 0.05 &&
+            // std::abs(z - initial_z_) < 0.05) {
           RCLCPP_INFO(this->get_logger(), "初期位置に戻った → 停止");
           publish_stop();
           state_ = State::STOPPED;
@@ -129,6 +135,34 @@ private:
         rclcpp::shutdown(); 
         break;
     }
+    rclcpp::Time now = this->get_clock()->now();
+
+    if (velocity_initialized_) {
+      double dt = (now - last_time_).seconds();
+      if (dt >= 0.005 && dt <= 0.1) {
+        double vx = (x - last_x_) / dt;
+        double vy = (y - last_y_) / dt;
+        double vz = (z - last_z_) / dt;
+
+        if ((abs_force > 0 && abs_force < 6 && (vx != 0.0 || vy != 0.0 || vz != 0.0)) ||
+            abs_force > 6) {
+          auto vel_msg = geometry_msgs::msg::TwistStamped();
+          vel_msg.header.stamp = now;
+          vel_msg.header.frame_id = "base_link";
+          vel_msg.twist.linear.x = vx;
+          vel_msg.twist.linear.y = vy;
+          vel_msg.twist.linear.z = vz;
+          velocity_pub_->publish(vel_msg);
+        }
+      }
+    }
+
+    last_time_ = now;
+    last_x_ = x;
+    last_y_ = y;
+    last_z_ = z;
+    velocity_initialized_ = true;
+
   }
 
   void force_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
@@ -140,7 +174,8 @@ private:
 
   bool exceeded_force()
   {
-    return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
+    //return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
+    return (std::abs(fx) + std::abs(fy)) > 6.0 ;
   } 
 
   void publish_velocity(double vx)
@@ -170,16 +205,21 @@ private:
 
   double velocity_calculation(double force)
   {
-    RCLCPP_INFO(this->get_logger(), "forece:%.3f",force);
+    //RCLCPP_INFO(this->get_logger(), "forece:%.3f",force);
+    if(force>=6.0)force=6.0;
     // double velocity=(150*(1-((1/6)*force)))/1000;
-    double velocity=0.10*(1.0-((1.0/6.0))*force);
-    if(velocity >= 0.10) velocity=0.10;
+    double velocity=1.0*(1.0-((1.0/6.0))*force);
+    if(velocity >= 1.0) velocity=1.0;
     return velocity;
   }
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr distance_pub_;
   rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr force_sub_;
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_pub_;
+  bool velocity_initialized_ = false;
+  rclcpp::Time last_time_;
+  double last_x_, last_y_, last_z_;
   rclcpp::TimerBase::SharedPtr timer_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;

@@ -42,7 +42,7 @@ public:
       "/distance_from_start", 10);
 
     timer_ = this->create_wall_timer(
-      50ms, std::bind(&ServoTwistMonitor::timer_callback, this));
+      5ms, std::bind(&ServoTwistMonitor::timer_callback, this));
 
     force_sub_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
       "/calibrated_force_data", 10,
@@ -74,7 +74,7 @@ private:
     double z = transform.transform.translation.z;
 
     double velocity=0;
-    double abs_force=std::abs(fx)+std::abs(fy);
+    double abs_force=std::sqrt((fx*fx)+(fy*fy));
 
 
     if (!initialized_) {
@@ -119,7 +119,7 @@ private:
         break;
 
       case State::MOVING_BACK:
-        if (std::abs(x - initial_x_) < 0.02 ){//&&
+        if (std::abs(x - initial_x_) < 0.01 ){//&&
             // std::abs(y - initial_y_) < 0.05 &&
             // std::abs(z - initial_z_) < 0.05) {
           RCLCPP_INFO(this->get_logger(), "初期位置に戻った → 停止");
@@ -139,12 +139,12 @@ private:
 
     if (velocity_initialized_) {
       double dt = (now - last_time_).seconds();
-      if (dt >= 0.005 && dt <= 0.1) {
+      if (dt >= 0.0001 && dt <= 0.1) {
         double vx = (x - last_x_) / dt;
         double vy = (y - last_y_) / dt;
         double vz = (z - last_z_) / dt;
 
-        if ((abs_force > 0 && abs_force < 6 && (vx != 0.0 || vy != 0.0 || vz != 0.0)) ||
+        if (( abs_force < 6 && (vx != 0.0 || vy != 0.0 || vz != 0.0)) ||
             abs_force > 6) {
           auto vel_msg = geometry_msgs::msg::TwistStamped();
           vel_msg.header.stamp = now;
@@ -153,14 +153,22 @@ private:
           vel_msg.twist.linear.y = vy;
           vel_msg.twist.linear.z = vz;
           velocity_pub_->publish(vel_msg);
+          last_time_ = now;
+          last_x_ = x;
+          last_y_ = y;
+          last_z_ = z;
         }
+
       }
+
+    }else {
+      last_time_ = now;
+      last_x_ = x;
+      last_y_ = y;
+      last_z_ = z;
     }
 
-    last_time_ = now;
-    last_x_ = x;
-    last_y_ = y;
-    last_z_ = z;
+
     velocity_initialized_ = true;
 
   }
@@ -175,7 +183,7 @@ private:
   bool exceeded_force()
   {
     //return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
-    return (std::abs(fx) + std::abs(fy)) > 6.0 ;
+    return (std::sqrt((fx*fx)+(fy*fy))) > 6.0 ;
   } 
 
   void publish_velocity(double vx)

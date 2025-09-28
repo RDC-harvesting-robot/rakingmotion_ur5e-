@@ -94,8 +94,8 @@ private:
     velocity = velocity_calculation(abs_force); 
     
 
-    RCLCPP_INFO(this->get_logger(), "[状態: %d] 距離: %.3f m, 速度: %.3f m/s,力: x=%.2f, y=%.2f, z=%.2f",
-                static_cast<int>(state_), dist,velocity,fx, fy, fz);
+    RCLCPP_INFO(this->get_logger(), "[状態: %d] 距離: %.3f m, 速度: %.3f m/s,力: x_y=%.2f",
+                static_cast<int>(state_), dist,velocity,abs_force);
 
               
 
@@ -183,7 +183,7 @@ private:
   bool exceeded_force()
   {
     //return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
-    return (std::sqrt((fx*fx)+(fy*fy))) > 6.0 ;
+    return (std::sqrt((fx*fx)+(fy*fy))) >= 6.0 ;
   } 
 
   void publish_velocity(double vx)

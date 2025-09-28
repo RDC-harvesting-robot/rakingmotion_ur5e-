@@ -38,17 +38,29 @@ public:
     timer_ = this->create_wall_timer(
       50ms, std::bind(&MoveAfterCollecting::control_loop, this));
 
+    wait_timer_ = this->create_wall_timer(
+      1000ms, std::bind(&MoveAfterCollecting::check_sensor_ready, this)
+    );
+
     RCLCPP_INFO(this->get_logger(), "/detected_leaf_pointを待機中...");
   }
 
 private:
   enum class Step { X, Y, Z, R_X,R_R, WAIT,R_Y,DONE };
   Step current_step_;
+  bool force_ready_ = false; // フォースセンサーデータ受信フラグ
 
 
   // ★WAIT処理のためのメンバ変数追加
   rclcpp::Time wait_start_time_;
   bool wait_started_ = false;
+
+  void check_sensor_ready()
+  {
+    if (!force_ready_) {
+      RCLCPP_WARN(this->get_logger(), "Waiting for force sensor data on /calibrated_force_data ...");
+    }
+  }
 
   void point_callback(const geometry_msgs::msg::PointStamped::SharedPtr msg) {
     if (received_point_) return;
@@ -88,6 +100,10 @@ private:
 
   void force_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
   {
+    if (!force_ready_) {
+      RCLCPP_INFO(this->get_logger(), "First force sensor data received.");
+      force_ready_ = true;
+    }
     fx = msg->wrench.force.x;
     fy = msg->wrench.force.y;
     fz = msg->wrench.force.z;
@@ -96,6 +112,10 @@ private:
 
   void control_loop() {
     if (!moving_ || current_step_ == Step::DONE) return;
+    if (!force_ready_) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,"Waiting for /calibrated_force_data ...");
+      return; // センサ準備できるまでは制御をスキップ
+    }
 
     geometry_msgs::msg::TransformStamped transform;
     try {
@@ -279,6 +299,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr force_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr wait_timer_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   geometry_msgs::msg::Point edge_point_;

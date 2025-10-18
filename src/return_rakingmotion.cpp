@@ -1,0 +1,186 @@
+#include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/twist_stamped.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+#include "geometry_msgs/msg/wrench_stamped.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
+#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/buffer.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include <executor_msgs/srv/plan.hpp>
+
+#include <chrono>
+#include <cmath>
+#include <string>
+#include <optional>
+#include <mutex>
+#include <future>
+
+using namespace std::chrono_literals;
+using Plan = executor_msgs::srv::Plan;
+
+class ServoBackNode : public rclcpp::Node
+{
+public:
+ServoBackNode() : Node("servo_back_node"), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_)
+{
+  base_frame_     = this->declare_parameter<std::string>("base_frame", "base_link");
+  tool_frame_     = this->declare_parameter<std::string>("tool_frame", "tool0");
+  back_tolerance_ = this->declare_parameter<double>("back_tolerance", 0.01);
+  force_limit_xy_ = this->declare_parameter<double>("force_limit_xy", 6.0);
+
+  // ★★ ここを追加：再入可能なグループを先に用意 ★★
+  cg_srv_   = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  cg_timer_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+
+  pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/servo_node/delta_twist_cmds", 10);
+  sub_force_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
+      "/calibrated_force_data", 10, std::bind(&ServoBackNode::force_cb, this, std::placeholders::_1));
+
+  rclcpp::QoS latched(1); latched.transient_local().reliable();
+  sub_initial_pose_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
+      "/initial_pose", latched, std::bind(&ServoBackNode::initial_pose_cb, this, std::placeholders::_1));
+
+  // ★ Humble 形式：rmw_qos_profile_services_default と cg_srv_ を指定
+  srv_ = this->create_service<Plan>(
+      "/back/plan",
+      std::bind(&ServoBackNode::handle_plan, this, std::placeholders::_1, std::placeholders::_2),
+      rmw_qos_profile_services_default,
+      cg_srv_);
+
+  // ★ タイマーにも cg_timer_ を渡す
+  timer_ = this->create_wall_timer(5ms, std::bind(&ServoBackNode::on_timer, this), cg_timer_);
+
+  RCLCPP_INFO(get_logger(), "[Back] ready base=%s tool=%s", base_frame_.c_str(), tool_frame_.c_str());
+}
+
+
+private:
+  void handle_plan(const std::shared_ptr<Plan::Request> req, std::shared_ptr<Plan::Response> res)
+  {
+    RCLCPP_INFO(get_logger(), "[Back] request: action=\"%s\" number=%d",
+                req->action.c_str(), static_cast<int>(req->number));
+
+    {
+      std::lock_guard<std::mutex> lk(mtx_);
+      started_ = true;
+      waypoint_number_ = req->number;
+      if (!have_goal_) RCLCPP_WARN(get_logger(), "まだ /initial_pose を受信していません。受信待ちで停止中。");
+      done_promise_.emplace();
+      done_future_ = done_promise_->get_future();
+    }
+
+    auto status = done_future_.wait_for(std::chrono::minutes(10));
+    std::string result = (status == std::future_status::ready) ? done_future_.get() : "timeout";
+    res->result = result;
+    RCLCPP_INFO(get_logger(), "[Back] service done: result=\"%s\"", res->result.c_str());
+  }
+
+  void initial_pose_cb(const geometry_msgs::msg::PointStamped::SharedPtr msg)
+  {
+    if (msg->header.frame_id != base_frame_) {
+      try {
+        auto tf = tf_buffer_.lookupTransform(base_frame_, msg->header.frame_id, tf2::TimePointZero);
+        geometry_msgs::msg::PointStamped p_out; tf2::doTransform(*msg, p_out, tf);
+        goal_x_ = p_out.point.x; goal_y_ = p_out.point.y; goal_z_ = p_out.point.z;
+      } catch (const tf2::TransformException &ex) {
+        RCLCPP_ERROR(get_logger(), "initial_pose 変換失敗: %s", ex.what());
+        return;
+      }
+    } else {
+      goal_x_ = msg->point.x; goal_y_ = msg->point.y; goal_z_ = msg->point.z;
+    }
+    have_goal_ = true;
+    RCLCPP_INFO(get_logger(), "[Back] goal set (%.3f, %.3f, %.3f)", goal_x_, goal_y_, goal_z_);
+  }
+
+  void on_timer()
+  {
+    if (!started_) { publish_velocity(0.0); return; }
+    if (!have_goal_) { publish_velocity(0.0); return; }
+
+    if (!tf_buffer_.canTransform(base_frame_, tool_frame_, tf2::TimePointZero, 100ms)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "TF待ち: %s->%s", base_frame_.c_str(), tool_frame_.c_str());
+      publish_velocity(0.0); return;
+    }
+
+    geometry_msgs::msg::TransformStamped tf;
+    try { tf = tf_buffer_.lookupTransform(base_frame_, tool_frame_, tf2::TimePointZero); }
+    catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "TF失敗: %s", ex.what());
+      publish_velocity(0.0); return;
+    }
+
+    const double x = tf.transform.translation.x;
+    const double y = tf.transform.translation.y;
+    const double z = tf.transform.translation.z;
+    const double dx = x - goal_x_, dy = y - goal_y_, dz = z - goal_z_;
+    const double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+    const double fxy = std::sqrt(fx_*fx_ + fy_*fy_);
+    const double v   = std::max(0.0, 1.0 - std::min(fxy, force_limit_xy_) / force_limit_xy_);
+
+    if (dist <= back_tolerance_) {
+      publish_velocity(0.0);
+      std::lock_guard<std::mutex> lk(mtx_);
+      started_ = false;
+      if (done_promise_) { done_promise_->set_value("raking_end"); done_promise_.reset(); }
+      RCLCPP_INFO(get_logger(), "[Back] reached goal (%.3f m)", dist);
+      return;
+    }
+
+    // シンプルに x だけ戻す（必要なら3Dベクトル制御に変更可）
+    const double sign_x = (dx > 0.0) ? -1.0 : 1.0;
+    publish_velocity(sign_x * v * max_speed_);
+  }
+
+  void force_cb(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
+  { fx_ = msg->wrench.force.x; fy_ = msg->wrench.force.y; fz_ = msg->wrench.force.z; }
+
+  void publish_velocity(double vx)
+  {
+    geometry_msgs::msg::TwistStamped m;
+    m.header.stamp = now(); m.header.frame_id = base_frame_;
+    m.twist.linear.x = vx;
+    pub_twist_->publish(m);
+  }
+
+  // pubs/subs/timer
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_twist_;
+  rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr sub_force_;
+  rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr  sub_initial_pose_;
+  rclcpp::Service<Plan>::SharedPtr srv_;
+  rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::CallbackGroup::SharedPtr cg_srv_;
+  rclcpp::CallbackGroup::SharedPtr cg_timer_;
+
+
+  // TF
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+
+  // params/state
+  std::string base_frame_, tool_frame_;
+  double back_tolerance_{0.01}, force_limit_xy_{6.0}, max_speed_{0.5};
+  double fx_{0}, fy_{0}, fz_{0};
+  bool started_{false}, have_goal_{false};
+  int  waypoint_number_{1};
+  double goal_x_{0}, goal_y_{0}, goal_z_{0};
+
+  // completion signaling
+  std::mutex mtx_;
+  std::optional<std::promise<std::string>> done_promise_{};
+  std::future<std::string> done_future_;
+
+};
+
+int main(int argc, char** argv)
+{
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<ServoBackNode>();
+  rclcpp::executors::MultiThreadedExecutor exec;  // ★重要：マルチスレッド
+  exec.add_node(node);
+  exec.spin();
+  rclcpp::shutdown();
+  return 0;
+}
+

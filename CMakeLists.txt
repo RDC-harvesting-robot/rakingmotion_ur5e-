@@ -17,6 +17,7 @@ find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(executor_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 
 add_executable(rakingmotion src/rakingmotion.cpp)
 add_executable(servo_keyboard_input src/servo_keyboard_input.cpp)
@@ -57,7 +58,8 @@ ament_target_dependencies(forward_rakingmotion
   tf2
   tf2_ros
   tf2_geometry_msgs
-  executor_msgs  
+  executor_msgs 
+  std_srvs
   )
 install(TARGETS forward_rakingmotion DESTINATION lib/${PROJECT_NAME})
 
@@ -69,6 +71,7 @@ ament_target_dependencies(return_rakingmotion
   tf2_ros
   tf2_geometry_msgs
   executor_msgs  
+  std_srvs
   )
 install(TARGETS return_rakingmotion DESTINATION lib/${PROJECT_NAME})
 

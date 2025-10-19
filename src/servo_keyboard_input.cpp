@@ -14,7 +14,7 @@ public:
   ServoKeyboardInput() : Node("servo_keyboard_input")
   {
     publisher_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
-      "/servo_node/delta_twist_cmds", 10);
+      "/left_arm/servo_node/delta_twist_cmds", 10);
 
     RCLCPP_INFO(this->get_logger(), "矢印キーとW/Sで方向指定：←(L) →(R) ↑(U) ↓(D) W=F（前） S=B（後）");
 
@@ -31,7 +31,7 @@ private:
     int key = getch_nonblock();
     geometry_msgs::msg::TwistStamped msg;
     msg.header.stamp = this->now();
-    msg.header.frame_id = "base_link";
+    msg.header.frame_id = "left_arm_base_link_inertia";
 
     const double speed = 0.3;
     bool send = false;

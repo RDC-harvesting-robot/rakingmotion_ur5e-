@@ -7,6 +7,7 @@
 #include "tf2_ros/buffer.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include <executor_msgs/srv/plan.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 #include <chrono>
 #include <cmath>
@@ -21,84 +22,93 @@ using Plan = executor_msgs::srv::Plan;
 class ServoForwardNode : public rclcpp::Node
 {
 public:
-  ServoForwardNode() : Node("servo_forward_node"), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_)
+  ServoForwardNode() : Node("servo_forward_node"), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_), state_(State::MOVING_FORWARD)
   {
-    // ご希望通りデフォルトは base_link / tool0
-    base_frame_ = this->declare_parameter<std::string>("base_frame", "base_link");
-    tool_frame_ = this->declare_parameter<std::string>("tool_frame", "tool0");
+    // Parameters
+    base_frame_     = this->declare_parameter<std::string>("base_frame", "left_arm_base_link_inertia");
+    tool_frame_     = this->declare_parameter<std::string>("tool_frame", "left_armtool0");
+    twist_topic_    = this->declare_parameter<std::string>("twist_topic", "/left_arm/servo_node/delta_twist_cmds");
+    force_topic_    = this->declare_parameter<std::string>("force_topic", "/left/calibrated_force_data");
     std::string direction = this->declare_parameter<std::string>("direction", "R");
-    linear_x_sign_ = (direction == "R") ? 1.0 : -1.0;
+    linear_x_sign_  = (direction == "R") ? 1.0 : -1.0;
     max_distance_   = this->declare_parameter<double>("max_distance", 0.2);
     force_limit_xy_ = this->declare_parameter<double>("force_limit_xy", 6.0);
+    max_speed_      = this->declare_parameter<double>("max_speed", 0.4); // m/s
 
-    cg_srv_   = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+    // Callback groups（サービスは同時1本、タイマは並行）
+    cg_srv_   = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     cg_timer_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
-
-    pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/servo_node/delta_twist_cmds", 10);
+    // IO
+    pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(twist_topic_, rclcpp::QoS(20).reliable());
     pub_dist_  = this->create_publisher<geometry_msgs::msg::PointStamped>("/distance_from_start", 10);
     sub_force_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
-      "/calibrated_force_data", 10, std::bind(&ServoForwardNode::force_cb, this, std::placeholders::_1));
+      force_topic_, 10, std::bind(&ServoForwardNode::force_cb, this, std::placeholders::_1));
 
-    // /initial_pose をラッチ配信（back が後から起動しても届く）
     rclcpp::QoS latched(1); latched.transient_local().reliable();
     initial_pose_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/initial_pose", latched);
 
- 
-    // rclcpp::ServiceOptions srv_opts;
-    // srv_opts.callback_group = cg_srv_;
+    // MoveIt Servo control (optional but helpful)
+    start_servo_cli_   = this->create_client<std_srvs::srv::Trigger>("/servo_node/start_servo");
+    unpause_servo_cli_ = this->create_client<std_srvs::srv::Trigger>("/servo_node/unpause_servo");
+
+    // Service (Humble signature)
     srv_ = this->create_service<Plan>(
       "/forward/plan",
       std::bind(&ServoForwardNode::handle_plan, this, std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default,
       cg_srv_);
-    // 制御はタイマーで駆動（サービスは開始合図だけ）
+
+    // Control loop
     timer_ = this->create_wall_timer(5ms, std::bind(&ServoForwardNode::on_timer, this), cg_timer_);
 
-    RCLCPP_INFO(get_logger(), "[Forward] ready base=%s tool=%s dir=%s",
-                base_frame_.c_str(), tool_frame_.c_str(), direction.c_str());
+    RCLCPP_INFO(get_logger(), "[Forward] ready base=%s tool=%s dir=%s topic=%s",
+                base_frame_.c_str(), tool_frame_.c_str(), direction.c_str(), twist_topic_.c_str());
   }
 
 private:
-  // === service handler ===
+  // ==== Service (reject while busy) ====
+  enum class State { MOVING_FORWARD, WAITING, MOVING_BACK, STOPPED };
+  State state_;
   void handle_plan(const std::shared_ptr<Plan::Request> req, std::shared_ptr<Plan::Response> res)
   {
-    RCLCPP_INFO(get_logger(), "[Forward] request: action=\"%s\" number=%d",
-                req->action.c_str(), static_cast<int>(req->number));
-
-    // 動作開始
+    (void)req;
     {
       std::lock_guard<std::mutex> lk(mtx_);
+      if (started_) {
+        RCLCPP_WARN(get_logger(), "[Forward] busy -> reject");
+        res->result = "busy";
+        return;
+      }
+      // Start servo (best-effort)
+      if (start_servo_cli_->wait_for_service(500ms))
+        (void)start_servo_cli_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+      if (unpause_servo_cli_->wait_for_service(500ms))
+        (void)unpause_servo_cli_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+
       started_ = true;
       initialized_ = false;
       published_init_ = false;
-      waypoint_number_ = req->number;
-      // 完了通知用の promise を新しく用意
       done_promise_.emplace();
       done_future_ = done_promise_->get_future();
     }
 
-    // ★ ここで完了まで待ち、完了したら result を返す
-    auto status = done_future_.wait_for(std::chrono::minutes(10)); // 必要ならタイムアウト調整
-    std::string result = (status == std::future_status::ready) ? done_future_.get() : "timeout";
-    res->result = result;
+    // Wait until motion complete
+    auto status = done_future_.wait_for(std::chrono::minutes(10));
+    res->result = (status == std::future_status::ready) ? done_future_.get() : "timeout";
     RCLCPP_INFO(get_logger(), "[Forward] service done: result=\"%s\"", res->result.c_str());
   }
 
-  // === timer loop ===
+  // ==== Timer loop ====
   void on_timer()
   {
     if (!started_) { publish_velocity(0.0); return; }
 
-    if (!tf_buffer_.canTransform(base_frame_, tool_frame_, tf2::TimePointZero, 100ms)) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "TF待ち: %s->%s", base_frame_.c_str(), tool_frame_.c_str());
-      publish_velocity(0.0); return;
-    }
-
     geometry_msgs::msg::TransformStamped tf;
-    try { tf = tf_buffer_.lookupTransform(base_frame_, tool_frame_, tf2::TimePointZero); }
-    catch (const tf2::TransformException &ex) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "TF失敗: %s", ex.what());
+    try {
+      tf = tf_buffer_.lookupTransform(base_frame_, tool_frame_, tf2::TimePointZero);
+    } catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "TF failed: %s", ex.what());
       publish_velocity(0.0); return;
     }
 
@@ -106,36 +116,58 @@ private:
     const double y = tf.transform.translation.y;
     const double z = tf.transform.translation.z;
 
+    double velocity=0;
+    double abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+
+
     if (!initialized_) {
-      ix_ = x; iy_ = y; iz_ = z;
+      initial_x_ = x;
+      initial_y_ = y;
+      initial_z_ = z;
       initialized_ = true;
-      RCLCPP_INFO(get_logger(), "[Forward] init (%.3f, %.3f, %.3f)", x, y, z);
-    }
-    if (!published_init_) {
+      RCLCPP_INFO(this->get_logger(), "初期位置: (%.3f, %.3f, %.3f)", x, y, z);
       geometry_msgs::msg::PointStamped init;
-      init.header.stamp = now(); init.header.frame_id = base_frame_;
-      init.point.x = ix_; init.point.y = iy_; init.point.z = iz_;
+      init.header.stamp = now();
+      init.header.frame_id = base_frame_;
+      init.point.x = initial_x_;
+      init.point.y = initial_y_;
+     init.point.z = initial_z_;
       initial_pose_pub_->publish(init);
-      published_init_ = true;
-      RCLCPP_INFO(get_logger(), "[Forward] /initial_pose latched");
+      RCLCPP_INFO(this->get_logger(), "[Forward] /initial_pose published");
     }
 
-    const double dist = std::sqrt((x-ix_)*(x-ix_) + (y-iy_)*(y-iy_) + (z-iz_)*(z-iz_));
-    publish_distance(dist);
+    double dist = std::sqrt(
+      std::pow(x - initial_x_, 2) +
+      std::pow(y - initial_y_, 2) +
+      std::pow(z - initial_z_, 2));
 
-    const double fxy = std::sqrt(fx_*fx_ + fy_*fy_);
-    const double v   = std::max(0.0, 1.0 - std::min(fxy, force_limit_xy_) / force_limit_xy_);
+    publish_distance(dist);  // 距離をパブリッシュ
+    velocity = velocity_calculation(abs_force); 
+    
 
-    if (dist >= max_distance_ || fxy >= force_limit_xy_) {
-      publish_velocity(0.0);
+    RCLCPP_INFO(this->get_logger(), "[状態: %d] 距離: %.3f m, 速度: %.3f m/s,力: x_y=%.2f",
+                static_cast<int>(state_), dist,velocity,abs_force);
 
-      std::lock_guard<std::mutex> lk(mtx_);
-      started_ = false;
-      if (done_promise_) { done_promise_->set_value("raking_end"); done_promise_.reset(); }
-      return;
-    }
+              
 
-    publish_velocity(linear_x_sign_ * v * max_speed_);
+    // switch (state_) {
+    //   case State::MOVING_FORWARD:
+    if (dist >= max_distance_ || exceeded_force()) {
+        RCLCPP_INFO(this->get_logger(), "前進停止");
+        publish_stop();
+        {
+          std::lock_guard<std::mutex> lk(mtx_);
+          started_ = false;
+          if (done_promise_) { done_promise_->set_value("raking_end"); done_promise_.reset(); }
+        }
+        return;
+      } else {
+        publish_velocity(linear_x_sign_*velocity);
+      }
+     
+       // break;
+
+    //}
   }
 
   void force_cb(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
@@ -148,60 +180,69 @@ private:
     m.twist.linear.x = vx;
     pub_twist_->publish(m);
   }
-
   void publish_distance(double d)
   {
     geometry_msgs::msg::PointStamped p;
     p.header.stamp = now(); p.header.frame_id = base_frame_;
-    p.point.x = d;
-    pub_dist_->publish(p);
+    p.point.x = d; pub_dist_->publish(p);
   }
+  double velocity_calculation(double force)
+  {
+    //RCLCPP_INFO(this->get_logger(), "forece:%.3f",force);
+    if(force>=6.0)force=6.0;
+    // double velocity=(150*(1-((1/6)*force)))/1000;
+    double velocity=1.0*(1.0-((1.0/6.0))*force);
+    if(velocity >= 1.0) velocity=1.0;
+    return velocity;
+  }
+  void publish_stop()
+  { 
+    publish_velocity(0.0);
+  }
+  bool exceeded_force()
+  {
+    //return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
+    return std::sqrt(fx_*fx_ + fy_*fy_) >= force_limit_xy_;
+  } 
 
-  // pubs/subs/timer
+  // IO
+  std::string base_frame_, tool_frame_, twist_topic_, force_topic_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_twist_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr  pub_dist_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr  initial_pose_pub_;
   rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr sub_force_;
   rclcpp::Service<Plan>::SharedPtr srv_;
   rclcpp::TimerBase::SharedPtr timer_;
-  rclcpp::CallbackGroup::SharedPtr cg_srv_;
-  rclcpp::CallbackGroup::SharedPtr cg_timer_;
-
+  rclcpp::CallbackGroup::SharedPtr cg_srv_, cg_timer_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_servo_cli_, unpause_servo_cli_;
 
   // TF
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
 
-  // params / state
-  std::string base_frame_, tool_frame_;
-  double linear_x_sign_{1.0};
-  double max_distance_{0.2};
-  double force_limit_xy_{6.0};
-  double max_speed_{0.5};
-
+  // params/state
+  double linear_x_sign_{1.0}, max_distance_{0.2}, force_limit_xy_{6.0}, max_speed_{0.4};
   double ix_{0}, iy_{0}, iz_{0};
   double fx_{0}, fy_{0}, fz_{0};
+  double fxy_filt_{0.0}, last_cmd_{0.0};
+  double initial_x_, initial_y_, initial_z_;
 
   // run flags
   bool started_{false}, initialized_{false}, published_init_{false};
-  int  waypoint_number_{1};
 
   // completion signaling
   std::mutex mtx_;
   std::optional<std::promise<std::string>> done_promise_{};
   std::future<std::string> done_future_;
-
 };
 
-// ★ MultiThreadedExecutor で並行実行（サービス待機中もタイマー/購読が動く）
 int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<ServoForwardNode>();
-  rclcpp::executors::MultiThreadedExecutor exec;  // ★重要：マルチスレッド
+  rclcpp::executors::MultiThreadedExecutor exec;
   exec.add_node(node);
   exec.spin();
   rclcpp::shutdown();
   return 0;
 }
-

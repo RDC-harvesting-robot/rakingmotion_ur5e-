@@ -23,8 +23,8 @@ class ServoBackNode : public rclcpp::Node
 public:
 ServoBackNode() : Node("servo_back_node"), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_)
 {
-  base_frame_     = this->declare_parameter<std::string>("base_frame", "base_link");
-  tool_frame_     = this->declare_parameter<std::string>("tool_frame", "tool0");
+  base_frame_     = this->declare_parameter<std::string>("base_frame", "left_arm_base_link_inertia");
+  tool_frame_     = this->declare_parameter<std::string>("tool_frame", "left_armtool0");
   back_tolerance_ = this->declare_parameter<double>("back_tolerance", 0.01);
   force_limit_xy_ = this->declare_parameter<double>("force_limit_xy", 6.0);
 
@@ -32,9 +32,9 @@ ServoBackNode() : Node("servo_back_node"), tf_buffer_(this->get_clock()), tf_lis
   cg_srv_   = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   cg_timer_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
-  pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/servo_node/delta_twist_cmds", 10);
+  pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/left_arm/servo_node/delta_twist_cmds", 10);
   sub_force_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
-      "/calibrated_force_data", 10, std::bind(&ServoBackNode::force_cb, this, std::placeholders::_1));
+      "/left/calibrated_force_data", 10, std::bind(&ServoBackNode::force_cb, this, std::placeholders::_1));
 
   rclcpp::QoS latched(1); latched.transient_local().reliable();
   sub_initial_pose_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
@@ -130,7 +130,7 @@ private:
 
     // シンプルに x だけ戻す（必要なら3Dベクトル制御に変更可）
     const double sign_x = (dx > 0.0) ? -1.0 : 1.0;
-    publish_velocity(sign_x * v * max_speed_);
+    publish_velocity(sign_x * v * max_speed_*10);
   }
 
   void force_cb(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)

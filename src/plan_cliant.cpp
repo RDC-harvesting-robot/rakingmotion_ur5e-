@@ -4,7 +4,6 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
-#include <string>
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -17,68 +16,65 @@ class PlanClientRoundTrip : public rclcpp::Node
 public:
   PlanClientRoundTrip() : Node("plan_client_roundtrip")
   {
+    last_stamp_ = rclcpp::Time(0, 0, this->get_clock()->get_clock_type());
     forward_srv_ = this->declare_parameter<std::string>("forward_service", "/forward/plan");
     back_srv_    = this->declare_parameter<std::string>("back_service", "/back/plan");
 
     forward_cli_ = this->create_client<Plan>(forward_srv_);
     back_cli_    = this->create_client<Plan>(back_srv_);
 
-    // /initial_pose をラッチ購読（forward から受け取り）
+    // latched /initial_pose
     rclcpp::QoS latched(1); latched.transient_local().reliable();
     initial_sub_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
-      "/initial_pose", latched, [this](geometry_msgs::msg::PointStamped::SharedPtr) {
+      "/initial_pose", latched, [this](geometry_msgs::msg::PointStamped::SharedPtr msg) {
+        // builtin_interfaces::msg::Time -> rclcpp::Time に変換して比較
+        const rclcpp::Time t(msg->header.stamp);
+        // 既に初期化済みかつ古い/同一スタンプは無視
+        if (last_stamp_.nanoseconds() != 0 && t <= last_stamp_) {
+          return;
+        }
+        last_stamp_ = t;
         got_initial_.store(true);
         RCLCPP_INFO(this->get_logger(), "Got /initial_pose. Press any key to start BACK...");
       });
 
-    // forward を1回送る（action="raking_start"）
     call_forward_();
-
-    // キー監視スレッド
     start_key_thread_();
-
-    // 状態確認タイマ
     timer_ = this->create_wall_timer(100ms, std::bind(&PlanClientRoundTrip::on_timer_, this));
   }
-
   ~PlanClientRoundTrip() override { stop_key_thread_(); }
 
 private:
   void call_forward_()
   {
     if (!forward_cli_->wait_for_service(5s)) {
-      RCLCPP_ERROR(get_logger(), "forward service not found: %s", forward_srv_.c_str());
-      return;
+      RCLCPP_ERROR(get_logger(), "forward service not found: %s", forward_srv_.c_str()); return;
     }
     auto req = std::make_shared<Plan::Request>();
-    req->action = "raking_start";
-    req->number = 1;
-
-    auto fut = forward_cli_->async_send_request(req,
-      [this](rclcpp::Client<Plan>::SharedFuture f){
-        (void)f;
-        RCLCPP_INFO(this->get_logger(), "[FORWARD] result received (should be 'raking_end').");
+    req->action = "raking_start"; req->number = 1;
+    forward_cli_->async_send_request(req,
+      [this](rclcpp::Client<Plan>::SharedFuture f) {
+        auto res = f.get();
+        RCLCPP_INFO(this->get_logger(), "[FORWARD] result: %s", res->result.c_str());
       });
-    (void)fut;
     RCLCPP_INFO(get_logger(), "Called FORWARD (action='raking_start'). Waiting /initial_pose...");
   }
 
   void call_back_()
   {
     if (!back_cli_->wait_for_service(5s)) {
-      RCLCPP_ERROR(get_logger(), "back service not found: %s", back_srv_.c_str());
-      return;
+      RCLCPP_ERROR(get_logger(), "back service not found: %s", back_srv_.c_str()); return;
     }
     auto req = std::make_shared<Plan::Request>();
-    req->action = "raking_start"; // 区別したければ "raking_return_start"
-    req->number = 1;
-
-    auto fut = back_cli_->async_send_request(req,
-      [this](rclcpp::Client<Plan>::SharedFuture f){
-        (void)f;
-        RCLCPP_INFO(this->get_logger(), "[BACK] result received (should be 'raking_end').");
+    req->action = "raking_start"; req->number = 1;
+    back_cli_->async_send_request(req,
+      [this](rclcpp::Client<Plan>::SharedFuture f) {
+        auto res = f.get();
+        if (res->result == "busy")
+          RCLCPP_WARN(this->get_logger(), "[BACK] busy (ignored)");
+        else
+          RCLCPP_INFO(this->get_logger(), "[BACK] result: %s", res->result.c_str());
       });
-    (void)fut;
     RCLCPP_INFO(get_logger(), "Called BACK (action='raking_start').");
   }
 
@@ -90,7 +86,7 @@ private:
     }
   }
 
-  // キー入力（非カノニカル・非ブロッキング）
+  // non-blocking key reader
   void start_key_thread_()
   {
     tcgetattr(STDIN_FILENO, &orig_);
@@ -122,6 +118,7 @@ private:
 
   std::string forward_srv_, back_srv_;
   std::atomic<bool> got_initial_{false}, key_pressed_{false}, back_called_{false};
+  rclcpp::Time last_stamp_;
 
   std::thread key_thread_; std::atomic<bool> key_stop_{false}; termios orig_;
 };

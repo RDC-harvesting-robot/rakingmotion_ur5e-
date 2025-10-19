@@ -1,8 +1,8 @@
 servo_forward_node:
   ros__parameters:
     # 共通フレーム
-    base_frame: base_link
-    tool_frame: tool0
+    base_frame: left_arm_base_link_inertia
+    tool_frame: left_armtool0
 
     # 向き（R=+x, L=-x）※必要に応じて変更
     direction: R
@@ -14,7 +14,7 @@ servo_forward_node:
     force_limit_xy: 6.0
 
     # 最大速度[m/s]（力による減速係数と掛け合わせ）
-    max_speed: 0.50
+    max_speed: 1.0
 
     # forwardでは未使用だが共通化のため置いておく（戻りの到達判定）
     back_tolerance: 0.01
@@ -22,8 +22,8 @@ servo_forward_node:
 servo_back_node:
   ros__parameters:
     # 共通フレーム
-    base_frame: base_link
-    tool_frame: tool0
+    base_frame: left_arm_base_link_inertia
+    tool_frame: left_armtool0
 
     # 到達判定[m]
     back_tolerance: 0.01
@@ -32,4 +32,4 @@ servo_back_node:
     force_limit_xy: 6.0
 
     # 最大速度[m/s]（力による減速係数と掛け合わせ）
-    max_speed: 0.50
+    max_speed: 1.0

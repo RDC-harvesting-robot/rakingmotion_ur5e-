@@ -28,7 +28,7 @@ ServoBackNode() : Node("servo_back_node"), tf_buffer_(this->get_clock()), tf_lis
   back_tolerance_ = this->declare_parameter<double>("back_tolerance", 0.01);
   force_limit_xy_ = this->declare_parameter<double>("force_limit_xy", 6.0);
 
-  // ★★ ここを追加：再入可能なグループを先に用意 ★★
+
   cg_srv_   = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   cg_timer_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
@@ -40,14 +40,14 @@ ServoBackNode() : Node("servo_back_node"), tf_buffer_(this->get_clock()), tf_lis
   sub_initial_pose_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
       "/initial_pose", latched, std::bind(&ServoBackNode::initial_pose_cb, this, std::placeholders::_1));
 
-  // ★ Humble 形式：rmw_qos_profile_services_default と cg_srv_ を指定
+
   srv_ = this->create_service<Plan>(
       "/back/plan",
       std::bind(&ServoBackNode::handle_plan, this, std::placeholders::_1, std::placeholders::_2),
       rmw_qos_profile_services_default,
       cg_srv_);
 
-  // ★ タイマーにも cg_timer_ を渡す
+
   timer_ = this->create_wall_timer(5ms, std::bind(&ServoBackNode::on_timer, this), cg_timer_);
 
   RCLCPP_INFO(get_logger(), "[Back] ready base=%s tool=%s", base_frame_.c_str(), tool_frame_.c_str());
@@ -128,7 +128,7 @@ private:
       return;
     }
 
-    // シンプルに x だけ戻す（必要なら3Dベクトル制御に変更可）
+  
     const double sign_x = (dx > 0.0) ? -1.0 : 1.0;
     publish_velocity(sign_x * v * max_speed_*10);
   }
@@ -144,7 +144,7 @@ private:
     pub_twist_->publish(m);
   }
 
-  // pubs/subs/timer
+
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_twist_;
   rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr sub_force_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr  sub_initial_pose_;
@@ -154,11 +154,11 @@ private:
   rclcpp::CallbackGroup::SharedPtr cg_timer_;
 
 
-  // TF
+
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
 
-  // params/state
+
   std::string base_frame_, tool_frame_;
   double back_tolerance_{0.01}, force_limit_xy_{6.0}, max_speed_{0.5};
   double fx_{0}, fy_{0}, fz_{0};
@@ -166,7 +166,6 @@ private:
   int  waypoint_number_{1};
   double goal_x_{0}, goal_y_{0}, goal_z_{0};
 
-  // completion signaling
   std::mutex mtx_;
   std::optional<std::promise<std::string>> done_promise_{};
   std::future<std::string> done_future_;
@@ -177,7 +176,7 @@ int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<ServoBackNode>();
-  rclcpp::executors::MultiThreadedExecutor exec;  // ★重要：マルチスレッド
+  rclcpp::executors::MultiThreadedExecutor exec;  
   exec.add_node(node);
   exec.spin();
   rclcpp::shutdown();

@@ -212,11 +212,11 @@ private:
   void force_cb(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
   { fx_ = msg->wrench.force.x; fy_ = msg->wrench.force.y; fz_ = msg->wrench.force.z; }
 
-  void publish_velocity(double vx)
+  void publish_velocity(double vz)
   {
     geometry_msgs::msg::TwistStamped m;
     m.header.stamp = now(); m.header.frame_id = base_frame_;
-    m.twist.linear.x = vx;
+    m.twist.linear.z = vx;
     pub_twist_->publish(m);
   }
   void publish_distance(double d)

@@ -19,8 +19,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(executor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 
+# --- rakingmotion ---
 add_executable(rakingmotion src/rakingmotion.cpp)
-add_executable(servo_keyboard_input src/servo_keyboard_input.cpp)
 ament_target_dependencies(rakingmotion 
   rclcpp 
   std_msgs
@@ -30,6 +30,8 @@ ament_target_dependencies(rakingmotion
   tf2_geometry_msgs
   )
 
+# --- servo_keyboard_input ---
+add_executable(servo_keyboard_input src/servo_keyboard_input.cpp)
 ament_target_dependencies(servo_keyboard_input
   rclcpp 
   std_msgs
@@ -39,20 +41,28 @@ ament_target_dependencies(servo_keyboard_input
   tf2_geometry_msgs
   )
 
+# --- auto_rakingmotion ---
 add_executable(auto_rakingmotion src/auto_rakingmotion.cpp)
 ament_target_dependencies(auto_rakingmotion
+  rclcpp        # <-- 修正: 必須
   std_msgs
   geometry_msgs
   tf2
   tf2_ros
   tf2_geometry_msgs
   cv_bridge
-  OpenCV
+  sensor_msgs   # <-- 修正: cv_bridge に必要
+  # OpenCV は ament パッケージではないため、ここから削除
   )
-install(TARGETS auto_rakingmotion DESTINATION lib/${PROJECT_NAME})
+# cv_bridge が OpenCV ライブラリをリンクします。
+# もしリンクエラーが出たら、以下を追加してください:
+# target_link_libraries(auto_rakingmotion PUBLIC ${OpenCV_LIBRARIES})
 
+
+# --- forward_rakingmotion ---
 add_executable(forward_rakingmotion src/forward_rakingmotion.cpp)
 ament_target_dependencies(forward_rakingmotion
+  rclcpp        # <-- 修正: 必須
   std_msgs
   geometry_msgs
   tf2
@@ -61,10 +71,11 @@ ament_target_dependencies(forward_rakingmotion
   executor_msgs 
   std_srvs
   )
-install(TARGETS forward_rakingmotion DESTINATION lib/${PROJECT_NAME})
 
+# --- return_rakingmotion ---
 add_executable(return_rakingmotion src/return_rakingmotion.cpp)
 ament_target_dependencies(return_rakingmotion
+  rclcpp        # <-- 修正: 必須
   std_msgs
   geometry_msgs
   tf2
@@ -73,10 +84,11 @@ ament_target_dependencies(return_rakingmotion
   executor_msgs  
   std_srvs
   )
-install(TARGETS return_rakingmotion DESTINATION lib/${PROJECT_NAME})
 
+# --- plan_cliant ---
 add_executable(plan_cliant src/plan_cliant.cpp)
 ament_target_dependencies(plan_cliant
+  rclcpp        # <-- 修正: 必須
   std_msgs
   geometry_msgs
   tf2
@@ -84,8 +96,8 @@ ament_target_dependencies(plan_cliant
   tf2_geometry_msgs
   executor_msgs
   )
-install(TARGETS plan_cliant DESTINATION lib/${PROJECT_NAME})
 
+# --- Installation (修正: 1つに統合) ---
 install(TARGETS
   rakingmotion
   servo_keyboard_input
@@ -95,16 +107,15 @@ install(TARGETS
   plan_cliant
   DESTINATION lib/${PROJECT_NAME}
 )
+
 install(
   DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
 )
 
-
 install(
   DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
-
 
 ament_package()

@@ -64,7 +64,10 @@ public:
 
     RCLCPP_INFO(get_logger(), "[Forward] ready base=%s tool=%s dir=%s topic=%s",
                 base_frame_.c_str(), tool_frame_.c_str(), direction.c_str(), twist_topic_.c_str());
-  }
+
+    velocity_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
+      "/calculated_velocity", 10);
+    }
 
 private:
   // ==== Service (reject while busy) ====
@@ -164,6 +167,43 @@ private:
       } else {
         publish_velocity(linear_x_sign_*velocity);
       }
+      
+      
+      
+    rclcpp::Time now = this->get_clock()->now();
+    if (velocity_initialized_) {
+      double dt = (now - last_time_).seconds();
+      if (dt >= 0.0001 && dt <= 0.1) {
+        double vx = (x - last_x_) / dt;
+        double vy = (y - last_y_) / dt;
+        double vz = (z - last_z_) / dt;
+
+        if (( abs_force < 6 && (vx != 0.0 || vy != 0.0 || vz != 0.0)) ||
+            abs_force > 6) {
+          auto vel_msg = geometry_msgs::msg::TwistStamped();
+          vel_msg.header.stamp = now;
+          vel_msg.header.frame_id = "base_link";
+          vel_msg.twist.linear.x = vx;
+          vel_msg.twist.linear.y = vy;
+          vel_msg.twist.linear.z = vz;
+          velocity_pub_->publish(vel_msg);
+          last_time_ = now;
+          last_x_ = x;
+          last_y_ = y;
+          last_z_ = z;
+        }
+
+      }
+
+    }else {
+      last_time_ = now;
+      last_x_ = x;
+      last_y_ = y;
+      last_z_ = z;
+    }
+
+
+    velocity_initialized_ = true;
      
        // break;
 
@@ -210,11 +250,15 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_twist_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr  pub_dist_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr  initial_pose_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_pub_;
   rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr sub_force_;
   rclcpp::Service<Plan>::SharedPtr srv_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::CallbackGroup::SharedPtr cg_srv_, cg_timer_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_servo_cli_, unpause_servo_cli_;
+  bool velocity_initialized_ = false;
+  double last_x_, last_y_, last_z_;
+  rclcpp::Time last_time_;
 
   // TF
   tf2_ros::Buffer tf_buffer_;

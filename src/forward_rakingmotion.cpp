@@ -24,7 +24,7 @@ class ServoForwardNode : public rclcpp::Node
 public:
   ServoForwardNode() : Node("servo_forward_node"), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_), state_(State::MOVING_FORWARD)
   {
-    // Parameters
+    
     base_frame_     = this->declare_parameter<std::string>("base_frame", "left_arm_base_link_inertia");
     tool_frame_     = this->declare_parameter<std::string>("tool_frame", "left_armtool0");
     twist_topic_    = this->declare_parameter<std::string>("twist_topic", "/left_arm/servo_node/delta_twist_cmds");
@@ -35,11 +35,11 @@ public:
     force_limit_xy_ = this->declare_parameter<double>("force_limit_xy", 6.0);
     max_speed_      = this->declare_parameter<double>("max_speed", 0.4); // m/s
 
-    // Callback groups（サービスは同時1本、タイマは並行）
+   
     cg_srv_   = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     cg_timer_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
-    // IO
+
     pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(twist_topic_, rclcpp::QoS(20).reliable());
     pub_dist_  = this->create_publisher<geometry_msgs::msg::PointStamped>("/distance_from_start", 10);
     sub_force_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
@@ -158,7 +158,7 @@ private:
         {
           std::lock_guard<std::mutex> lk(mtx_);
           started_ = false;
-          if (done_promise_) { done_promise_->set_value("raking_end_222222222222"); done_promise_.reset(); }
+          if (done_promise_) { done_promise_->set_value("raking_end"); done_promise_.reset(); }
         }
         return;
       } else {

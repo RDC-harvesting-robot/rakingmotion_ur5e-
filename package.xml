@@ -13,6 +13,7 @@
   <test_depend>ament_lint_common</test_depend>
   <depend>cv_bridge</depend>
   <depend>sensor_msgs</depend>
+  <depend>executor_msgs</depend>
   <exec_depend>opencv</exec_depend>
 
 

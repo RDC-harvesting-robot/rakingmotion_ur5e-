@@ -123,7 +123,7 @@ private:
       publish_velocity(0.0);
       std::lock_guard<std::mutex> lk(mtx_);
       started_ = false;
-      if (done_promise_) { done_promise_->set_value("raking_end"); done_promise_.reset(); }
+      if (done_promise_) { done_promise_->set_value("return_raking_end"); done_promise_.reset(); }
       RCLCPP_INFO(get_logger(), "[Back] reached goal (%.3f m)", dist);
       return;
     }

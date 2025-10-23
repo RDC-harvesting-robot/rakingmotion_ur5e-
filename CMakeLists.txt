@@ -71,6 +71,17 @@ ament_target_dependencies(forward_rakingmotion
   executor_msgs 
   std_srvs
   )
+add_executable(forward_rakingmotion_test src/forward_rakingmotion_test.cpp)
+ament_target_dependencies(forward_rakingmotion_test
+  rclcpp        # <-- 修正: 必須
+  std_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  executor_msgs 
+  std_srvs
+  )
 
 # --- return_rakingmotion ---
 add_executable(return_rakingmotion src/return_rakingmotion.cpp)
@@ -104,6 +115,7 @@ install(TARGETS
   auto_rakingmotion
   return_rakingmotion
   forward_rakingmotion
+  forward_rakingmotion_test
   plan_cliant
   DESTINATION lib/${PROJECT_NAME}
 )

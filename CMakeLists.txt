@@ -50,10 +50,24 @@ ament_target_dependencies(auto_rakingmotion
   )
 install(TARGETS auto_rakingmotion DESTINATION lib/${PROJECT_NAME})
 
+add_executable(click_motion src/click_motion.cpp)
+ament_target_dependencies(click_motion
+  std_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  cv_bridge
+  OpenCV
+  )
+install(TARGETS click_motion DESTINATION lib/${PROJECT_NAME})
+
+
 install(TARGETS
   rakingmotion
   servo_keyboard_input
   auto_rakingmotion
+  click_motion
   DESTINATION lib/${PROJECT_NAME}
 )
 

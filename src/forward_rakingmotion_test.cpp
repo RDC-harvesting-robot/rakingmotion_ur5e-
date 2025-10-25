@@ -151,7 +151,7 @@ private:
     velocity = velocity_calculation(abs_force); 
     
 
-    RCLCPP_INFO(this->get_logger(), "[状態: %d] 距離: %.3f m, 速度: %.3f m/s,力: x_y=%.2f",
+    RCLCPP_INFO(this->get_logger(), "[状態: %d] 距離x: %.3f距離y: %.3f m, 速度: %.3f m/s,力: x_y=%.2f",
                 static_cast<int>(state_), x_dist,y_dist,velocity,abs_force);
 
     // --- ステートマシンによる制御 ---

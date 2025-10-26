@@ -40,7 +40,7 @@ public:
     cg_timer_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
 
-    pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(twist_topic_, rclcpp::QoS(20).reliable());
+    pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/left_arm/servo_node/delta_twist_cmds", 10);
     pub_dist_  = this->create_publisher<geometry_msgs::msg::PointStamped>("/distance_from_start", 10);
     sub_force_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
       force_topic_, 10, std::bind(&ServoForwardNode::force_cb, this, std::placeholders::_1));
@@ -105,7 +105,9 @@ private:
   // ==== Timer loop ====
   void on_timer()
   {
+    static int state_=0;
     if (!started_) { publish_velocity(0.0); return; }
+    else if(state_== 0)state_ = 1;
 
     geometry_msgs::msg::TransformStamped tf;
     try {
@@ -120,7 +122,11 @@ private:
     const double z = tf.transform.translation.z;
 
     double velocity=0;
-    double abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+    double abs_force=0;
+     abs_force=0;
+    abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+    // RCLCPP_INFO(this->get_logger(), "[状態: %d] 距離: %.3f m, 速度: %.3f m/s,力: x_y=%.2f",
+    // static_cast<int>(state_), ,,abs_force);
 
 
     if (!initialized_) {
@@ -128,15 +134,15 @@ private:
       initial_y_ = y;
       initial_z_ = z;
       initialized_ = true;
-      RCLCPP_INFO(this->get_logger(), "初期位置: (%.3f, %.3f, %.3f)", x, y, z);
-      geometry_msgs::msg::PointStamped init;
-      init.header.stamp = now();
-      init.header.frame_id = base_frame_;
-      init.point.x = initial_x_;
-      init.point.y = initial_y_;
-     init.point.z = initial_z_;
-      initial_pose_pub_->publish(init);
-      RCLCPP_INFO(this->get_logger(), "[Forward] /initial_pose published");
+    //   RCLCPP_INFO(this->get_logger(), "初期位置: (%.3f, %.3f, %.3f)", x, y, z);
+    //   geometry_msgs::msg::PointStamped init;
+    //   init.header.stamp = now();
+    //   init.header.frame_id = base_frame_;
+    //   init.point.x = initial_x_;
+    //   init.point.y = initial_y_;
+    //  init.point.z = initial_z_;
+    //   initial_pose_pub_->publish(init);
+    //   RCLCPP_INFO(this->get_logger(), "[Forward] /initial_pose published");
     }
 
     double dist = std::sqrt(
@@ -153,8 +159,32 @@ private:
 
               
 
-    // switch (state_) {
-    //   case State::MOVING_FORWARD:
+  switch (state_) {
+    case 1:
+    if (dist >= max_distance_ || exceeded_force()) {
+        RCLCPP_INFO(this->get_logger(), "前進");
+        publish_stop();
+        initial_x_ = x;
+        initial_y_ = y;
+        initial_z_ = z;
+        RCLCPP_INFO(this->get_logger(), "初期位置: (%.3f, %.3f, %.3f)", x, y, z);
+        geometry_msgs::msg::PointStamped init;
+        init.header.stamp = now();
+        init.header.frame_id = base_frame_;
+        init.point.x = initial_x_;
+        init.point.y = initial_y_;
+        init.point.z = initial_z_;
+        initial_pose_pub_->publish(init);
+        RCLCPP_INFO(this->get_logger(), "[Forward] /initial_pose published");
+        dist=0;
+        state_=2;
+        break;
+      } else {
+        publish_velocity_y(-1.0);
+      }
+      break;
+    
+    case 2:
     if (dist >= max_distance_ || exceeded_force()) {
         RCLCPP_INFO(this->get_logger(), "前進停止");
         publish_stop();
@@ -207,17 +237,30 @@ private:
      
        // break;
 
-    //}
+    }
   }
 
   void force_cb(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
-  { fx_ = msg->wrench.force.x; fy_ = msg->wrench.force.y; fz_ = msg->wrench.force.z; }
+  { 
+    fx_ = msg->wrench.force.x;
+    fy_ = msg->wrench.force.y;
+    fz_ = msg->wrench.force.z; 
+    RCLCPP_INFO(this->get_logger(), "forece_x:%.3f,forece_y:%.3f",fx_,fy_);
+  }
 
   void publish_velocity(double vz)
   {
     geometry_msgs::msg::TwistStamped m;
     m.header.stamp = now(); m.header.frame_id = base_frame_;
     m.twist.linear.z = vz;
+    pub_twist_->publish(m);
+  }
+
+  void publish_velocity_y(double vy)
+  {
+    geometry_msgs::msg::TwistStamped m;
+    m.header.stamp = now(); m.header.frame_id = base_frame_;
+    m.twist.linear.y = vy;
     pub_twist_->publish(m);
   }
   void publish_distance(double d)

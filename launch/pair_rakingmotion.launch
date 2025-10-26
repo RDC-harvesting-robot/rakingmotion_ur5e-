@@ -7,6 +7,15 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('rakingmotion_ur5e')
     param_file = os.path.join(pkg_share, 'config', 'rakingmotion_params.yaml')
 
+    hr_node = Node(
+        package='hr_executor',
+        executable='concept_demo_hr',
+        name='concept_demo_hr',
+        output='screen',
+        
+    )
+
+
     forward_node = Node(
         package='rakingmotion_ur5e',
         executable='forward_rakingmotion',
@@ -25,5 +34,6 @@ def generate_launch_description():
 
     return LaunchDescription([
         forward_node,
-        back_node
+        back_node,
+        hr_node
     ])

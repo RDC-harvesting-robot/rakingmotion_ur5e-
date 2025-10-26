@@ -95,8 +95,10 @@ private:
 
   void on_timer()
   {
+    static int state_=0;
     if (!started_) { publish_velocity(0.0); return; }
     if (!have_goal_) { publish_velocity(0.0); return; }
+    if(state_== 0)state_ = 1;
 
     if (!tf_buffer_.canTransform(base_frame_, tool_frame_, tf2::TimePointZero, 100ms)) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "TF待ち: %s->%s", base_frame_.c_str(), tool_frame_.c_str());
@@ -118,19 +120,46 @@ private:
 
     const double fxy = std::sqrt(fx_*fx_ + fy_*fy_);
     const double v   = std::max(0.0, 1.0 - std::min(fxy, force_limit_xy_) / force_limit_xy_);
+    double velocity=0;
+    double abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+    velocity = velocity_calculation(abs_force); 
+    double dist_2 = std::sqrt(
+      std::pow(x - initial_x_, 2) +
+      std::pow(y - initial_y_, 2) +
+      std::pow(z - initial_z_, 2));
 
-    if (dist <= back_tolerance_) {
-      publish_velocity(0.0);
-      std::lock_guard<std::mutex> lk(mtx_);
-      started_ = false;
-      if (done_promise_) { done_promise_->set_value("return_raking_end"); done_promise_.reset(); }
-      RCLCPP_INFO(get_logger(), "[Back] reached goal (%.3f m)", dist);
-      return;
+    switch (state_) {
+      case 1:
+        if (dist <= back_tolerance_) {
+          publish_velocity(0.0);
+          RCLCPP_INFO(get_logger(), "[Back] reached goal (%.3f m)", dist);
+          initial_x_ = x;
+          initial_y_ = y;
+          initial_z_ = z;
+          state_=2;
+          break;
+        } else {
+          const double sign_x = (dx > 0.0) ? -1.0 : 1.0;
+          RCLCPP_INFO(get_logger(), "[Back] reached goal (%.3f m)", dist);
+          publish_velocity(velocity);
+        }
+        break;
+      case 2:
+        if (dist_2 >= 0.2 || exceeded_force()) {
+          RCLCPP_INFO(this->get_logger(), "前進");
+          publish_stop();
+          std::lock_guard<std::mutex> lk(mtx_);
+          started_ = false;
+          if (done_promise_) { done_promise_->set_value("return_raking_end"); done_promise_.reset(); }
+          return;
+        } else {
+          publish_velocity_y(1.0);
+          RCLCPP_INFO(get_logger(), "[Back] reached goal_________ (%.3f m)", dist_2);
+        }
+        break;
     }
 
   
-    const double sign_x = (dx > 0.0) ? -1.0 : 1.0;
-    publish_velocity(sign_x * v * max_speed_*10);
   }
 
   void force_cb(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
@@ -143,6 +172,33 @@ private:
     m.twist.linear.x = vx;
     pub_twist_->publish(m);
   }
+
+  void publish_velocity_y(double vy)
+  {
+    geometry_msgs::msg::TwistStamped m;
+    m.header.stamp = now(); m.header.frame_id = base_frame_;
+    m.twist.linear.y = vy;
+    pub_twist_->publish(m);
+  }
+
+  double velocity_calculation(double force)
+  {
+    //RCLCPP_INFO(this->get_logger(), "forece:%.3f",force);
+    if(force>=6.0)force=6.0;
+    // double velocity=(150*(1-((1/6)*force)))/1000;
+    double velocity=1.0*(1.0-((1.0/6.0))*force);
+    if(velocity >= 1.0) velocity=1.0;
+    return -1*velocity;
+  }
+  void publish_stop()
+  { 
+    publish_velocity(0.0);
+  }
+  bool exceeded_force()
+  {
+    //return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
+    return std::sqrt(fx_*fx_ + fy_*fy_) >= force_limit_xy_;
+  } 
 
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_twist_;
@@ -165,6 +221,7 @@ private:
   bool started_{false}, have_goal_{false};
   int  waypoint_number_{1};
   double goal_x_{0}, goal_y_{0}, goal_z_{0};
+  double initial_x_, initial_y_, initial_z_;
 
   std::mutex mtx_;
   std::optional<std::promise<std::string>> done_promise_{};

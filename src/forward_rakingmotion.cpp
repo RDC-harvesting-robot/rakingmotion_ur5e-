@@ -43,7 +43,7 @@ public:
     pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/left_arm/servo_node/delta_twist_cmds", 10);
     pub_dist_  = this->create_publisher<geometry_msgs::msg::PointStamped>("/distance_from_start", 10);
     sub_force_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
-      force_topic_, 10, std::bind(&ServoForwardNode::force_cb, this, std::placeholders::_1));
+      force_topic_, 1, std::bind(&ServoForwardNode::force_cb, this, std::placeholders::_1));
 
     rclcpp::QoS latched(1); latched.transient_local().reliable();
     initial_pose_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/initial_pose", latched);
@@ -121,10 +121,10 @@ private:
     const double y = tf.transform.translation.y;
     const double z = tf.transform.translation.z;
 
-    double velocity=0;
-    double abs_force=0;
-     abs_force=0;
-    abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+     double velocity=0;
+    // double abs_force=0;
+    //  abs_force=0;
+    // abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
     // RCLCPP_INFO(this->get_logger(), "[状態: %d] 距離: %.3f m, 速度: %.3f m/s,力: x_y=%.2f",
     // static_cast<int>(state_), ,,abs_force);
 
@@ -161,7 +161,7 @@ private:
 
   switch (state_) {
     case 1:
-    if (dist >= max_distance_ || exceeded_force()) {
+    if (dist >= 0.3 || exceeded_force(abs_force)) {
         RCLCPP_INFO(this->get_logger(), "前進");
         publish_stop();
         initial_x_ = x;
@@ -185,7 +185,7 @@ private:
       break;
     
     case 2:
-    if (dist >= max_distance_ || exceeded_force()) {
+    if (dist >= max_distance_ ) {
         RCLCPP_INFO(this->get_logger(), "前進停止");
         publish_stop();
         {
@@ -245,7 +245,9 @@ private:
     fx_ = msg->wrench.force.x;
     fy_ = msg->wrench.force.y;
     fz_ = msg->wrench.force.z; 
-    RCLCPP_INFO(this->get_logger(), "forece_x:%.3f,forece_y:%.3f",fx_,fy_);
+    
+   abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+   //RCLCPP_INFO(this->get_logger(), "forece_X_Y:%.3f",abs_force);
   }
 
   void publish_velocity(double vz)
@@ -272,9 +274,9 @@ private:
   double velocity_calculation(double force)
   {
     //RCLCPP_INFO(this->get_logger(), "forece:%.3f",force);
-    if(force>=6.0)force=6.0;
+    if(force>=force_limit_xy_)force=force_limit_xy_;
     // double velocity=(150*(1-((1/6)*force)))/1000;
-    double velocity=1.0*(1.0-((1.0/6.0))*force);
+    double velocity=1.0*(1.0-((1.0/force_limit_xy_))*force);
     if(velocity >= 1.0) velocity=1.0;
     return velocity;
   }
@@ -282,10 +284,18 @@ private:
   { 
     publish_velocity(0.0);
   }
-  bool exceeded_force()
+  bool exceeded_force(double force)
   {
+    static double force_buff=0;
     //return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
-    return std::sqrt(fx_*fx_ + fy_*fy_) >= force_limit_xy_;
+    // RCLCPP_INFO(this->get_logger(), "forece_X_Y:%.3f",force);
+    if(force >= force_limit_xy_ && force_buff >= force_limit_xy_ && force_buff != force){
+      return 1;
+    }else {
+      force_buff =  force;
+      return 0;
+    }
+   
   } 
 
   // IO
@@ -313,7 +323,7 @@ private:
   double fx_{0}, fy_{0}, fz_{0};
   double fxy_filt_{0.0}, last_cmd_{0.0};
   double initial_x_, initial_y_, initial_z_;
-
+  double abs_force=0;
   // run flags
   bool started_{false}, initialized_{false}, published_init_{false};
 

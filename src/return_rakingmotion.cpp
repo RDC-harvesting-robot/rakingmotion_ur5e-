@@ -130,7 +130,7 @@ private:
 
     switch (state_) {
       case 1:
-        if (dist <= back_tolerance_) {
+        if (dist <= back_tolerance_|| exceeded_force(abs_force)) {
           publish_velocity(0.0);
           RCLCPP_INFO(get_logger(), "[Back] reached goal (%.3f m)", dist);
           initial_x_ = x;
@@ -145,7 +145,7 @@ private:
         }
         break;
       case 2:
-        if (dist_2 >= 0.2 || exceeded_force()) {
+        if (dist_2 >= 0.3 || exceeded_force(abs_force)) {
           RCLCPP_INFO(this->get_logger(), "前進");
           publish_stop();
           std::lock_guard<std::mutex> lk(mtx_);
@@ -184,9 +184,9 @@ private:
   double velocity_calculation(double force)
   {
     //RCLCPP_INFO(this->get_logger(), "forece:%.3f",force);
-    if(force>=6.0)force=6.0;
+    if(force>=force_limit_xy_)force=force_limit_xy_;
     // double velocity=(150*(1-((1/6)*force)))/1000;
-    double velocity=1.0*(1.0-((1.0/6.0))*force);
+    double velocity=1.0*(1.0-((1.0/force_limit_xy_))*force);
     if(velocity >= 1.0) velocity=1.0;
     return -1*velocity;
   }
@@ -194,10 +194,19 @@ private:
   { 
     publish_velocity(0.0);
   }
-  bool exceeded_force()
+
+  bool exceeded_force(double force)
   {
+    static double force_buff=0;
     //return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
-    return std::sqrt(fx_*fx_ + fy_*fy_) >= force_limit_xy_;
+    if(force >= force_limit_xy_ && force_buff >= force_limit_xy_ && force_buff != force){
+      return 1;
+  
+    }else {
+      force_buff =  force;
+      return 0;
+    }
+   
   } 
 
 

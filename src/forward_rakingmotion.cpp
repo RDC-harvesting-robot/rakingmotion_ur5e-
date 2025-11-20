@@ -31,7 +31,7 @@ public:
     force_topic_    = this->declare_parameter<std::string>("force_topic", "/left/calibrated_force_data");
     std::string direction = this->declare_parameter<std::string>("direction", "R");
     linear_x_sign_  = (direction == "R") ? 1.0 : -1.0;
-    max_distance_   = this->declare_parameter<double>("max_distance", 0.2);
+    max_distance_   = this->declare_parameter<double>("max_distance", 0.25);
     force_limit_xy_ = this->declare_parameter<double>("force_limit_xy", 6.0);
     max_speed_      = this->declare_parameter<double>("max_speed", 0.4); // m/s
 
@@ -40,10 +40,10 @@ public:
     cg_timer_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
 
-    pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/left_arm/servo_node/delta_twist_cmds", 10);
+    pub_twist_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/left_arm/servo_node/delta_twist_cmds", 100);
     pub_dist_  = this->create_publisher<geometry_msgs::msg::PointStamped>("/distance_from_start", 10);
     sub_force_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
-      force_topic_, 1, std::bind(&ServoForwardNode::force_cb, this, std::placeholders::_1));
+      force_topic_, 10, std::bind(&ServoForwardNode::force_cb, this, std::placeholders::_1));
 
     rclcpp::QoS latched(1); latched.transient_local().reliable();
     initial_pose_pub_ = this->create_publisher<geometry_msgs::msg::PointStamped>("/initial_pose", latched);
@@ -60,7 +60,7 @@ public:
       cg_srv_);
 
     // Control loop
-    timer_ = this->create_wall_timer(5ms, std::bind(&ServoForwardNode::on_timer, this), cg_timer_);
+    timer_ = this->create_wall_timer(1ms, std::bind(&ServoForwardNode::on_timer, this), cg_timer_);
 
     RCLCPP_INFO(get_logger(), "[Forward] ready base=%s tool=%s dir=%s topic=%s",
                 base_frame_.c_str(), tool_frame_.c_str(), direction.c_str(), twist_topic_.c_str());
@@ -161,7 +161,7 @@ private:
 
   switch (state_) {
     case 1:
-    if (dist >= 0.3 || exceeded_force(abs_force)) {
+    if (dist >= 0.3 ) {
         RCLCPP_INFO(this->get_logger(), "前進");
         publish_stop();
         initial_x_ = x;
@@ -185,7 +185,7 @@ private:
       break;
     
     case 2:
-    if (dist >= max_distance_ ) {
+    if (dist >= max_distance_ || exceeded_force(abs_force)) {
         RCLCPP_INFO(this->get_logger(), "前進停止");
         publish_stop();
         {
@@ -193,6 +193,7 @@ private:
           started_ = false;
           if (done_promise_) { done_promise_->set_value("raking_end"); done_promise_.reset(); }
         }
+        rclcpp::shutdown();
         return;
       } else {
         publish_velocity(linear_x_sign_*velocity);

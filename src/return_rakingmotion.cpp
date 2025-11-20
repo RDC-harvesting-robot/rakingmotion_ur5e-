@@ -48,7 +48,7 @@ ServoBackNode() : Node("servo_back_node"), tf_buffer_(this->get_clock()), tf_lis
       cg_srv_);
 
 
-  timer_ = this->create_wall_timer(5ms, std::bind(&ServoBackNode::on_timer, this), cg_timer_);
+  timer_ = this->create_wall_timer(1ms, std::bind(&ServoBackNode::on_timer, this), cg_timer_);
 
   RCLCPP_INFO(get_logger(), "[Back] ready base=%s tool=%s", base_frame_.c_str(), tool_frame_.c_str());
 }
@@ -96,8 +96,8 @@ private:
   void on_timer()
   {
     static int state_=0;
-    if (!started_) { publish_velocity(0.0); return; }
-    if (!have_goal_) { publish_velocity(0.0); return; }
+    if (!started_) {  return; }
+    if (!have_goal_) {  return; }
     if(state_== 0)state_ = 1;
 
     if (!tf_buffer_.canTransform(base_frame_, tool_frame_, tf2::TimePointZero, 100ms)) {
@@ -121,7 +121,8 @@ private:
     const double fxy = std::sqrt(fx_*fx_ + fy_*fy_);
     const double v   = std::max(0.0, 1.0 - std::min(fxy, force_limit_xy_) / force_limit_xy_);
     double velocity=0;
-    double abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+    // double abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+    // velocity = velocity_calculation(abs_force); 
     velocity = velocity_calculation(abs_force); 
     double dist_2 = std::sqrt(
       std::pow(x - initial_x_, 2) +
@@ -130,7 +131,7 @@ private:
 
     switch (state_) {
       case 1:
-        if (dist <= back_tolerance_|| exceeded_force(abs_force)) {
+        if (dist <= back_tolerance_) {
           publish_velocity(0.0);
           RCLCPP_INFO(get_logger(), "[Back] reached goal (%.3f m)", dist);
           initial_x_ = x;
@@ -145,12 +146,13 @@ private:
         }
         break;
       case 2:
-        if (dist_2 >= 0.3 || exceeded_force(abs_force)) {
+        if (dist_2 >= 0.3 ) {
           RCLCPP_INFO(this->get_logger(), "前進");
           publish_stop();
           std::lock_guard<std::mutex> lk(mtx_);
           started_ = false;
           if (done_promise_) { done_promise_->set_value("return_raking_end"); done_promise_.reset(); }
+          rclcpp::shutdown();
           return;
         } else {
           publish_velocity_y(1.0);
@@ -163,7 +165,14 @@ private:
   }
 
   void force_cb(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
-  { fx_ = msg->wrench.force.x; fy_ = msg->wrench.force.y; fz_ = msg->wrench.force.z; }
+  { 
+    fx_ = msg->wrench.force.x;
+    fy_ = msg->wrench.force.y;
+    fz_ = msg->wrench.force.z; 
+    
+   abs_force=std::sqrt((fx_*fx_)+(fy_*fy_));
+   //RCLCPP_INFO(this->get_logger(), "forece_X_Y:%.3f",abs_force);
+  }
 
   void publish_velocity(double vx)
   {
@@ -231,6 +240,7 @@ private:
   int  waypoint_number_{1};
   double goal_x_{0}, goal_y_{0}, goal_z_{0};
   double initial_x_, initial_y_, initial_z_;
+  double abs_force;
 
   std::mutex mtx_;
   std::optional<std::promise<std::string>> done_promise_{};

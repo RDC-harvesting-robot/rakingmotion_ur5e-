@@ -141,7 +141,7 @@ private:
     double dz_approach = (target_z_ + 0.08) - current_z;
 
     // (★修正) 力の計算: XZ平面なので fx と fz を使用 (fy は無視)
-    double abs_force = std::abs(fx) + std::abs(fz);
+    double abs_force = std::abs(fx) + std::abs(fz) + std::abs(fy);
 
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
        "Step: %d, Approach Err: dx=%.3f, dy=%.3f, dz=%.3f, Force(XZ):%.3f (fx=%.2f, fz=%.2f)",

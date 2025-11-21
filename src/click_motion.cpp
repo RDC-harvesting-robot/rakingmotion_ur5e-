@@ -141,7 +141,7 @@ private:
     double dz_approach = (target_z_ + 0.08) - current_z;
 
     // (★修正) 力の計算: XZ平面なので fx と fz を使用 (fy は無視)
-    double abs_force = std::abs(fx) + std::abs(fz);
+    double abs_force = std::abs(fx) + std::abs(fz) + std::abs(fy);
 
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
        "Step: %d, Approach Err: dx=%.3f, dy=%.3f, dz=%.3f, Force(XZ):%.3f (fx=%.2f, fz=%.2f)",
@@ -218,7 +218,7 @@ private:
         }
         // (★修正) XZ方向に移動
         twist.twist.linear.x = scale * raking_dir_x_;
-        twist.twist.linear.z = scale * raking_dir_z_; // YではなくZ
+        // twist.twist.linear.z = scale * raking_dir_z_; // YではなくZ
       }
       break;
 
@@ -257,7 +257,7 @@ private:
 
         // (★修正) XZ方向に移動
         twist.twist.linear.x = scale * return_dir_x;
-        twist.twist.linear.z = scale * return_dir_z; // YではなくZ
+        // twist.twist.linear.z = scale * return_dir_z; // YではなくZ
       }
       break;
 
@@ -296,12 +296,6 @@ private:
     twist.twist.angular.y = 0.0;
     twist.twist.angular.z = 0.0;
     twist_pub_->publish(twist);
-  }
-
-  // (★修正) 力の閾値: XZ平面なので fx と fz を使用
-  bool exceeded_force()
-  {
-    return (std::abs(fx) + std::abs(fz)) > 6.0 ;
   }
 
   // (★修正) 速度計算: 力は abs_force (XZ平面) を使う

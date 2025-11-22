@@ -16,7 +16,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(sensor_msgs REQUIRED)
-
+find_package(std_srvs REQUIRED)
 
 add_executable(rakingmotion src/rakingmotion.cpp)
 add_executable(servo_keyboard_input src/servo_keyboard_input.cpp)
@@ -62,12 +62,20 @@ ament_target_dependencies(click_motion
   )
 install(TARGETS click_motion DESTINATION lib/${PROJECT_NAME})
 
+add_executable(dumy_trigger src/dumy_trigger.cpp)
+ament_target_dependencies(dumy_trigger
+  rclcpp
+  std_msgs
+  std_srvs
+)
+
 
 install(TARGETS
   rakingmotion
   servo_keyboard_input
   auto_rakingmotion
   click_motion
+  dumy_trigger
   DESTINATION lib/${PROJECT_NAME}
 )
 

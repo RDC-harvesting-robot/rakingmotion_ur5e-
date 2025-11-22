@@ -290,6 +290,15 @@ private:
           rclcpp::shutdown();
           return;
         }
+        double return_mag = dist_to_start;
+        double return_dir_x = (return_mag > 1e-6) ? (return_dx / return_mag) : 0.0;
+        double return_dir_y = (return_mag > 1e-6) ? (return_dy / return_mag) : 0.0;
+        double return_dir_z = (return_mag > 1e-6) ? (return_dz / return_mag) : 0.0;
+
+        twist.twist.linear.x = scale * return_dir_x;
+        twist.twist.linear.y = scale * return_dir_y;
+        twist.twist.linear.z = scale * return_dir_z;
+
       }
       break;
 

@@ -1,4 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
+#include "std_msgs/msg/bool.hpp"
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -9,6 +10,31 @@
 #include <cmath>
 #include <chrono>
 
+// 注意：アームの座標系と力覚センサの座標系が違う
+// -----------------------------------------------
+// ロボット座標系
+// 
+//               Z ^  /|
+//                 | /
+//                 |/
+//     X-----------+------------>
+//                /|
+//               / |
+//            Y /  |
+// 
+// -----------------------------------------------
+// -----------------------------------------------
+// 力覚座標系
+// 
+//               Y ^  /|
+//                 | /
+//                 |/
+//     X-----------+------------>
+//                /|
+//               / |
+//            Z /  |
+// 
+// -----------------------------------------------
 using namespace std::chrono_literals;
 
 class MoveAfterCollecting : public rclcpp::Node {
@@ -31,6 +57,11 @@ public:
       "/click_point", // 重心点 (B)
       rclcpp::SensorDataQoS(),
       std::bind(&MoveAfterCollecting::leaf_point_callback, this, std::placeholders::_1));
+
+    raking_trigger_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+      "/raking_trigger",
+      10,
+      std::bind(&MoveAfterCollecting::raking_trigger_callback, this, std::placeholders::_1));
 
     twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
       "/servo_node/delta_twist_cmds", 10);
@@ -73,6 +104,12 @@ private:
 
     if (has_edge_point_) {
       calculate_target_and_start_moving();
+    }
+  }
+
+  void raking_trigger_callback(const std_msgs::msg::Bool::SharedPtr msg) {
+    if (msg->data) {
+      raking_trigger_ = true;
     }
   }
 
@@ -137,10 +174,10 @@ private:
 
     // アプローチ目標への誤差
     double dx_approach = (target_x_ - 0.04) - current_x;
-    double dy_approach = (target_y_ - 0.1) - current_y;
+    double dy_approach = (target_y_ - 0.2) - current_y;
     double dz_approach = (target_z_ + 0.08) - current_z;
 
-    // (★修正) 力の計算: XZ平面なので fx と fz を使用 (fy は無視)
+    // 力の計算
     double abs_force = std::abs(fx) + std::abs(fz) + std::abs(fy);
 
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
@@ -184,16 +221,17 @@ private:
           publish_stop();
           RCLCPP_INFO(this->get_logger(), "Y到達。次はかき集め(R_X)へ。");
 
-          // (★修正) XZ方向ベクトルを計算
+          // XZ方向ベクトルを計算
           if (!calculate_raking_direction()) {
             RCLCPP_ERROR(this->get_logger(), "かき集め方向を計算できません。停止します。");
             current_step_ = Step::DONE;
             rclcpp::shutdown();
             return;
           }
-          // (★修正) 開始位置のXとZを保存
+          // 開始位置を保存
           raking_start_x_ = current_x;
           raking_start_z_ = current_z; // YではなくZ
+          raking_start_y_ = current_y;
 
           current_step_ = Step::R_X;
           return;
@@ -204,7 +242,7 @@ private:
       // --- かき集め (A->B方向へXZ移動) ---
       case Step::R_X:
       {
-        // (★修正) 停止条件: 開始地点からのXZ平面距離
+        // 停止条件: 開始地点からのXZ平面距離
         double dist_traveled = std::sqrt(std::pow(current_x - raking_start_x_, 2) +
                                          std::pow(current_z - raking_start_z_, 2)); // YではなくZ
 
@@ -216,35 +254,45 @@ private:
           RCLCPP_INFO(this->get_logger(), "raking motion 停止。5秒待機。");
           return;
         }
-        // (★修正) XZ方向に移動
+        // XZ方向に移動
         twist.twist.linear.x = scale * raking_dir_x_;
-        twist.twist.linear.z = scale * raking_dir_z_; // YではなくZ
+        twist.twist.linear.z = scale * raking_dir_z_; 
       }
       break;
 
      case Step::WAIT:
       if (wait_started_) {
         rclcpp::Duration elapsed = this->get_clock()->now() - wait_start_time_;
-        if (elapsed.seconds() >= 5.0) {
-          RCLCPP_INFO(this->get_logger(), "5秒待機完了 → 戻り(R_R)");
+        if (raking_trigger_){
+          RCLCPP_INFO(this->get_logger(), "raking_trigger 受信 → 戻り(R_R)");
           current_step_ = Step::R_R;
-        } else {
+          raking_trigger_ = false;
+          wait_started_ = false;
+          return;
+        }
+        else{
           publish_stop();
         }
+        // if (elapsed.seconds() >= 5.0) {
+        //   RCLCPP_INFO(this->get_logger(), "5秒待機完了 → 戻り(R_R)");
+        //   current_step_ = Step::R_R;
+        // } else {
+        //   publish_stop();
+        // }
       }
       break;
 
       // --- 戻り (かき集め開始地点へXZ移動) ---
       case Step::R_R:
       {
-        // (★修正) 戻り目標: かき集め開始地点 (X, Z)
+        // 戻り目標: かき集め開始地点 (X, Z)
         double return_dx = raking_start_x_ - current_x;
         double return_dz = raking_start_z_ - current_z; // YではなくZ
         double dist_to_start = std::sqrt(return_dx*return_dx + return_dz*return_dz); // YではなくZ
 
         if (dist_to_start <= threshold) {
           current_step_ = Step::R_Y;
-          target_y_ = (current_y - 0.1); // 最終後退のY目標を設定
+          // target_y_ = (current_y - 0.1); // 最終後退のY目標を設定
           publish_stop();
           RCLCPP_INFO(this->get_logger(), "raking motion return 完了。Y軸後退へ。");
           return;
@@ -255,7 +303,7 @@ private:
         double return_dir_x = (return_mag > 1e-6) ? (return_dx / return_mag) : 0.0;
         double return_dir_z = (return_mag > 1e-6) ? (return_dz / return_mag) : 0.0; // YではなくZ
 
-        // (★修正) XZ方向に移動
+        // XZ方向に移動
         twist.twist.linear.x = scale * return_dir_x;
         twist.twist.linear.z = scale * return_dir_z; // YではなくZ
       }
@@ -264,15 +312,15 @@ private:
       // --- 後退 (Y軸) ---
       case Step::R_Y:
       {
-        double return_dy_final = target_y_ - current_y;
+        double return_dy = raking_start_y_ - current_y;
 
-        if (std::abs(return_dy_final) < threshold) {
+        if (std::abs(return_dy) < threshold) {
           publish_stop();
           RCLCPP_INFO(this->get_logger(), "Y軸後退完了.初期位置へ");
           current_step_ = Step::R_S;
           return;
         }
-        twist.twist.linear.y = scale * (return_dy_final > 0 ? 1 : -1);
+        twist.twist.linear.y = scale * (return_dy > 0 ? 1 : -1);
       }
       break;
 
@@ -329,18 +377,17 @@ private:
     return (std::abs(fx) + std::abs(fz)) > 6.0 ;
   }
 
-  // (★修正) 速度計算: 力は abs_force (XZ平面) を使う
+  // 速度計算: 力は abs_force (XY平面) を使う
   double velocity_calculation(double force_xz)
   {
     if(force_xz >= 6.0) force_xz = 6.0;
     // 1.0 m/s を最大速度とする (元のロジック)
     double velocity = 1.0 * (1.0 - (force_xz / 6.0));
     if(velocity < 0.0) velocity = 0.0; // 念のため
-    // if(velocity >= 1.0) velocity=1.0; // このチェックは不要
     return velocity;
   }
 
-  // (★修正) かき集め方向(A->B)のXZ正規化ベクトルを計算する
+  //かき集め方向(A->B)のXZ正規化ベクトルを計算する
   bool calculate_raking_direction() {
     if (!has_edge_point_ || !has_leaf_point_) {
       RCLCPP_WARN(this->get_logger(), "ポイント未取得: A=%d, B=%d", has_edge_point_, has_leaf_point_);
@@ -349,19 +396,19 @@ private:
 
     // A(edge_point_) と B(leaf_point_) のカメラ相対座標を使用
     double dx = leaf_point_.x - edge_point_.x; // B.x - A.x
-    double dz = leaf_point_.z - edge_point_.z; // B.z - A.z (★YではなくZ)
+    double dz = leaf_point_.z - edge_point_.z; // B.z - A.z
 
-    double mag = std::sqrt(dx*dx + dz*dz); // (★YではなくZ)
+    double mag = std::sqrt(dx*dx + dz*dz);
 
     if (mag < 0.001) {
       RCLCPP_WARN(this->get_logger(), "クリック点と重心点がほぼ同じです。X方向(+1)に移動します。");
       raking_dir_x_ = 1.0;
-      raking_dir_z_ = 0.0; // (★YではなくZ)
+      raking_dir_z_ = 0.0;
       return true;
     }
 
     raking_dir_x_ = dx / mag;
-    raking_dir_z_ = dz / mag; // (★YではなくZ)
+    raking_dir_z_ = dz / mag;
 
     RCLCPP_INFO(this->get_logger(), "かき集め方向(A->B)を計算 (X: %.3f, Z: %.3f)", raking_dir_x_, raking_dir_z_); // (★YではなくZ)
     return true;
@@ -370,6 +417,7 @@ private:
 
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr sub_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr leaf_point_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr raking_trigger_sub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr force_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -390,7 +438,10 @@ private:
   double raking_dir_x_ = 0.0;
   double raking_dir_z_ = 0.0; // YではなくZ
   double raking_start_x_ = 0.0;
-  double raking_start_z_ = 0.0; // YではなくZ
+  double raking_start_z_ = 0.0;
+  double raking_start_y_ = 0.0;
+
+  bool raking_trigger_ = false;
 
   // 初期位置を記録しておく
   double initial_x;

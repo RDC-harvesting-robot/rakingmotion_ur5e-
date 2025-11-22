@@ -46,7 +46,7 @@ public:
   }
 
 private:
-  enum class Step { WAIT_FOR_INPUT, X, Y, Z, R_X, R_R, WAIT, R_Y, DONE };
+  enum class Step { WAIT_FOR_INPUT, X, Y, Z, R_X, R_R, WAIT, R_Y,R_S, DONE };
   Step current_step_;
 
   rclcpp::Time wait_start_time_;
@@ -89,9 +89,9 @@ private:
       return;
     }
 
-    double initial_x = transform.transform.translation.x;
-    double initial_y = transform.transform.translation.y;
-    double initial_z = transform.transform.translation.z;
+    initial_x = transform.transform.translation.x;
+    initial_y = transform.transform.translation.y;
+    initial_z = transform.transform.translation.z;
 
     const auto & ptA = edge_point_;
 
@@ -261,19 +261,35 @@ private:
       }
       break;
 
-      // --- 最終後退 (Y軸) ---
+      // --- 後退 (Y軸) ---
       case Step::R_Y:
       {
         double return_dy_final = target_y_ - current_y;
 
         if (std::abs(return_dy_final) < threshold) {
           publish_stop();
-          RCLCPP_INFO(this->get_logger(), "Y軸後退完了。シャットダウン。");
+          RCLCPP_INFO(this->get_logger(), "Y軸後退完了.初期位置へ");
+          current_step_ = Step::R_S;
+          return;
+        }
+        twist.twist.linear.y = scale * (return_dy_final > 0 ? 1 : -1);
+      }
+      break;
+
+      case Step::R_S:
+      {
+        // 初期位置への移動
+        double return_dx = initial_x - current_x;
+        double return_dy = initial_y - current_y;
+        double return_dz = initial_z - current_z;
+        double dist_to_start = std::sqrt(return_dx*return_dx + return_dz*return_dz + return_dy*return_dy);
+        if (dist_to_start < threshold) {
+          publish_stop();
+          RCLCPP_INFO(this->get_logger(), "初期位置へ移動完了.動作を終了します");
           current_step_ = Step::DONE;
           rclcpp::shutdown();
           return;
         }
-        twist.twist.linear.y = scale * (return_dy_final > 0 ? 1 : -1);
       }
       break;
 
@@ -366,6 +382,11 @@ private:
   double raking_dir_z_ = 0.0; // YではなくZ
   double raking_start_x_ = 0.0;
   double raking_start_z_ = 0.0; // YではなくZ
+
+  // 初期位置を記録しておく
+  double initial_x;
+  double initial_y;
+  double initial_z;
 };
 
 int main(int argc, char * argv[]) {

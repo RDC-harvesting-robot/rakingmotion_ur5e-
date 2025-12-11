@@ -62,6 +62,18 @@ ament_target_dependencies(click_motion
   )
 install(TARGETS click_motion DESTINATION lib/${PROJECT_NAME})
 
+add_executable(click_motion_duty src/click_motion_duty.cpp)
+ament_target_dependencies(click_motion_duty
+  std_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  cv_bridge
+  OpenCV
+  )
+install(TARGETS click_motion_duty DESTINATION lib/${PROJECT_NAME})
+
 add_executable(dumy_trigger src/dumy_trigger.cpp)
 ament_target_dependencies(dumy_trigger
   rclcpp
@@ -75,6 +87,7 @@ install(TARGETS
   servo_keyboard_input
   auto_rakingmotion
   click_motion
+  click_motion_duty
   dumy_trigger
   DESTINATION lib/${PROJECT_NAME}
 )

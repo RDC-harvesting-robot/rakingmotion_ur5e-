@@ -101,13 +101,14 @@ private:
 
     switch (state_) {
       case State::MOVING_FORWARD:
-        if (dist >= 0.2 || exceeded_force()) {
+        if (dist >= max_dist || exceeded_force()) {
           RCLCPP_INFO(this->get_logger(), "前進停止 → 5秒待機");
           state_ = State::WAITING;
           stop_time_ = this->now();
           publish_stop();
         } else {
-          publish_velocity(linear_x_*velocity);
+          if(mode){publish_velocity(linear_x_*velocity);
+          }else publish_velocity(linear_x_*1);
         }
         break;
 
@@ -126,7 +127,8 @@ private:
           publish_stop();
           state_ = State::STOPPED;
         } else {
-          publish_velocity(-linear_x_*velocity);
+          if(mode){publish_velocity(-linear_x_*velocity);
+          }else publish_velocity(-linear_x_*1);
         }
         break;
 
@@ -144,8 +146,8 @@ private:
         double vy = (y - last_y_) / dt;
         double vz = (z - last_z_) / dt;
 
-        if (( abs_force < 6 && (vx != 0.0 || vy != 0.0 || vz != 0.0)) ||
-            abs_force > 6) {
+        if (( abs_force < max_force && (vx != 0.0 || vy != 0.0 || vz != 0.0)) ||
+            abs_force > max_force) {
           auto vel_msg = geometry_msgs::msg::TwistStamped();
           vel_msg.header.stamp = now;
           vel_msg.header.frame_id = "base_link";
@@ -183,7 +185,7 @@ private:
   bool exceeded_force()
   {
     //return std::abs(fx) > 6.0 || std::abs(fy) > 6.0 || std::abs(fz) > 6.0;
-    return (std::sqrt((fx*fx)+(fy*fy))) >= 6.0 ;
+    return (std::sqrt((fx*fx)+(fy*fy))) >= max_force ;
   } 
 
   void publish_velocity(double vx)
@@ -214,9 +216,9 @@ private:
   double velocity_calculation(double force)
   {
     //RCLCPP_INFO(this->get_logger(), "forece:%.3f",force);
-    if(force>=6.0)force=6.0;
+    if(force>=max_force)force=max_force;
     // double velocity=(150*(1-((1/6)*force)))/1000;
-    double velocity=1.0*(1.0-((1.0/6.0))*force);
+    double velocity=1.0*(1.0-((1.0/max_force))*force);
     if(velocity >= 1.0) velocity=1.0;
     return velocity;
   }
@@ -231,6 +233,9 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
+  double max_dist=0.2;
+  double max_force=6.0;
+  int mode=1;
 
   double linear_x_;
   double fx = 0, fy = 0, fz = 0;
